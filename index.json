@@ -1,0 +1,56 @@
+{
+    "bhltest": {
+        "aliases": {},
+        "mappings": {
+            "properties": {
+                "id": {
+                    "type": "long"
+                },
+                "itemid": {
+                    "type": "keyword"
+                },
+                "text": {
+                    "type": "text",
+                    "index_options": "offsets",
+                    "analyzer": "folding"
+                },
+                "volume": {
+                    "type": "keyword"
+                },
+                "year": {
+                    "type": "integer"
+                }
+            }
+        },
+        "settings": {
+            "index": {
+                "routing": {
+                    "allocation": {
+                        "include": {
+                            "_tier_preference": "data_content"
+                        }
+                    }
+                },
+                "number_of_shards": "1",
+                "provided_name": "bhltest",
+                "creation_date": "1772544056209",
+                "analysis": {
+                    "analyzer": {
+                        "folding": {
+                            "filter": [
+                                "lowercase",
+                                "asciifolding"
+                            ],
+                            "tokenizer": "standard"
+                        }
+                    }
+                },
+                "number_of_replicas": "1",
+                "uuid": "wPw4MNUHRhyXVfUCS4la_g",
+                "version": {
+                    "created": "8100299"
+                }
+            }
+        }
+    }
+}
