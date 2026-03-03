@@ -3,152 +3,240 @@
 require_once ('config.inc.php');
 require_once ('elastic.php');
 
+$search_query = isset($_GET['q']) ? trim($_GET['q']) : '';
 
-$query_json = '{
-  "size": 0,
-  "query": {
-    "bool": {
-      "should": [
-        {
-          "match_phrase": {
-            "text": {
-              "query": "<QUERY>",
-              "slop": 3,
-              "boost": 3
-            }
-          }
-        },
-        {
-          "match": {
-            "text": {
-              "query": "<QUERY>",
-              "minimum_should_match": "75%"
-            }
-          }
-        }
-      ],
-      "minimum_should_match": 1
-    }
-  },
-  "aggs": {
-    "by_item_id": {
-      "terms": {
-        "field": "itemid",
-        "size": 20,
-        "order": {
-          "max_score.value": "desc"
-        }
-      },
-      "aggs": {
-        "max_score": {
-          "max": {
-            "script": {
-              "lang": "painless",
-              "source": "_score"
-            }
-          }
-        },
-        "top_pages": {
-          "top_hits": {
-            "size": 3,
-            "_source": ["id", "itemid", "volume", "year"],
-            "highlight": {
-              "pre_tags": ["<mark>"],
-              "post_tags": ["</mark>"],
-              "fields": {
-                "text": {
-                  "fragment_size": 200,
-                  "number_of_fragments": 2
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}';
+$buckets = [];
+$total   = 0;
 
+if ($search_query !== '')
+{
+	$query = [
+		'size'  => 0,
+		'query' => [
+			'bool' => [
+				'should' => [
+					['match_phrase' => ['text' => ['query' => $search_query, 'slop' => 3, 'boost' => 3]]],
+					['match'        => ['text' => ['query' => $search_query, 'minimum_should_match' => '75%']]],
+				],
+				'minimum_should_match' => 1,
+			]
+		],
+		'aggs' => [
+			'by_item_id' => [
+				'terms' => [
+					'field' => 'itemid',
+					'size'  => 20,
+					'order' => ['max_score.value' => 'desc'],
+				],
+				'aggs' => [
+					'max_score' => [
+						'max' => ['script' => ['lang' => 'painless', 'source' => '_score']],
+					],
+					'top_pages' => [
+						'top_hits' => [
+							'size'    => 3,
+							'_source' => ['id', 'itemid', 'volume', 'year'],
+							'highlight' => [
+								'pre_tags'  => ['<mark>'],
+								'post_tags' => ['</mark>'],
+								'fields'    => [
+									'text' => ['fragment_size' => 200, 'number_of_fragments' => 2],
+								],
+							],
+						],
+					],
+				],
+			],
+		],
+	];
 
-$search_query = 'Notes synonymiques sur divers Dasytides';
+	$resp    = $elastic->send('POST', '_search', json_encode($query));
+	$obj     = json_decode($resp);
+	$total   = $obj->hits->total->value;
+	$buckets = $obj->aggregations->by_item_id->buckets;
+}
 
-$query_json = str_replace('<QUERY>', $search_query, $query_json);
+?><!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BHL Search<?= $search_query ? ' – ' . htmlspecialchars($search_query) : '' ?></title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
-$resp = $elastic->send('POST', '_search?pretty', $post_data = $query_json);
-
-$obj = json_decode($resp);
-
-//print_r($obj);
-
-echo '<html>';
-echo '<head>';
-echo '<style>
 body {
-	font-family:sans-serif;
-	padding:2em;
+	font-family: Arial, sans-serif;
+	font-size: 14px;
+	color: #202124;
+	padding: 24px 32px;
+	max-width: 900px;
+}
+
+/* ── Search bar ── */
+.search-bar {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 20px;
+}
+.search-bar input[type=text] {
+	flex: 1;
+	padding: 10px 16px;
+	font-size: 16px;
+	border: 1px solid #dfe1e5;
+	border-radius: 24px;
+	outline: none;
+}
+.search-bar input[type=text]:focus {
+	border-color: #4285f4;
+	box-shadow: 0 1px 6px rgba(66,133,244,.3);
+}
+.search-bar button {
+	padding: 10px 20px;
+	background: #f8f9fa;
+	border: 1px solid #dfe1e5;
+	border-radius: 24px;
+	font-size: 14px;
+	cursor: pointer;
+	color: #3c4043;
+}
+.search-bar button:hover { background: #e8eaed; }
+
+/* ── Result count ── */
+.result-count {
+	font-size: 13px;
+	color: #70757a;
+	margin-bottom: 20px;
+}
+
+/* ── Individual result card ── */
+.result {
+	display: flex;
+	gap: 20px;
+	margin-bottom: 32px;
+}
+
+.result-thumb {
+	flex: 0 0 80px;
+}
+.result-thumb a img {
+	width: 80px;
+	display: block;
+	border: 1px solid #e0e0e0;
+}
+
+.result-body {
+	flex: 1;
+}
+
+.result-title {
+	font-size: 18px;
+	margin-bottom: 2px;
+}
+.result-title a {
+	color: #1a0dab;
+	text-decoration: none;
+}
+.result-title a:hover { text-decoration: underline; }
+
+.result-meta {
+	font-size: 13px;
+	color: #70757a;
+	margin-bottom: 10px;
+}
+
+/* ── Snippet boxes ── */
+.snippet {
+	border: 1px solid #e0e0e0;
+	border-radius: 4px;
+	padding: 10px 14px;
+	margin-bottom: 8px;
+}
+.snippet-label {
+	font-size: 11px;
+	font-weight: bold;
+	letter-spacing: .05em;
+	color: #70757a;
+	margin-bottom: 6px;
+	text-transform: uppercase;
+}
+.snippet-label a {
+	color: #1a0dab;
+	text-decoration: none;
+	font-weight: normal;
+	font-size: 12px;
+	letter-spacing: 0;
+	text-transform: none;
+}
+.snippet-label a:hover { text-decoration: underline; }
+.snippet-text {
+	font-size: 13px;
+	line-height: 1.6;
+	color: #3c4043;
 }
 mark {
-	font-weight:bold;
 	background: none;
+	font-weight: bold;
+	color: #202124;
 }
-a {
-    text-decoration: none;
-}
+</style>
+</head>
+<body>
 
-/* If we want an underline when we mouse over the link */
-a:hover {
-    text-decoration:underline;
-}			
+<form class="search-bar" method="get" action="">
+	<input type="text" name="q" value="<?= htmlspecialchars($search_query) ?>" placeholder="Search BHL…" autofocus>
+	<button type="submit">Search</button>
+</form>
 
-</style>';
-echo '</head>';
-echo '<body>';
+<?php if ($search_query !== ''): ?>
 
-echo '<h1>' . $search_query . '</h1>';
+<p class="result-count">
+	<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> matched
+	across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
+</p>
 
-echo '<ul>';
-
-foreach ($obj->aggregations->by_item_id->buckets as $bucket)
-{
-	echo '<li>';
-
-	echo '<img height="100" src="https://www.biodiversitylibrary.org/pagethumb/' . $bucket->top_pages->hits->hits[0]->_id . '">';
-	
-	echo  $bucket->key . " " . $bucket->top_pages->hits->hits[0]->_source->volume . " <b>" . $bucket->max_score->value . "</b>";
-	
-	
-	echo '<ul>';
-	foreach ($bucket->top_pages->hits->hits as $hit)
-	{
-		echo '<li>';
-		
-		echo '<span>page number goes here</span>';
-		
-		echo '<ul>';
-		foreach ($hit->highlight->text as $highlight)
-		{
-			echo '<li>';
-			echo '<a href="https://www.biodiversitylibrary.org/page/' . $hit->_id . '" target="_new">';
-			echo $highlight;
-			echo '</li>';
-			echo '</a>';
-		}
-		echo '</ul>';
-		
-		echo '</li>';
-	
-	}
-	echo '</ul>';
-	
-	
-	
-	echo '</li>';
-}
-
-
-echo '</ul>';
-echo '</body>';
-echo '</html>';
-
-
+<?php foreach ($buckets as $bucket):
+	$top_hit   = $bucket->top_pages->hits->hits[0];
+	$source    = $top_hit->_source;
+	$thumb_id  = $top_hit->_id;
+	$item_url  = 'https://www.biodiversitylibrary.org/item/' . $source->itemid;
+	$thumb_url = 'https://www.biodiversitylibrary.org/pagethumb/' . $thumb_id;
+	$title     = $source->volume ?: 'Item ' . $source->itemid;
+	$year      = $source->year;
 ?>
+<div class="result">
+
+	<div class="result-thumb">
+		<a href="<?= $item_url ?>" target="_blank">
+			<img src="<?= $thumb_url ?>" alt="Thumbnail">
+		</a>
+	</div>
+
+	<div class="result-body">
+		<h2 class="result-title">
+			<a href="<?= $item_url ?>" target="_blank"><?= htmlspecialchars($title) ?></a>
+		</h2>
+		<p class="result-meta"><?= $year ?> &middot; Biodiversity Heritage Library</p>
+
+		<?php foreach ($bucket->top_pages->hits->hits as $hit):
+			$page_url = 'https://www.biodiversitylibrary.org/page/' . $hit->_id;
+		?>
+		<div class="snippet">
+			<p class="snippet-label">
+				Found on page &ndash;
+				<a href="<?= $page_url ?>" target="_blank">View page <?= $hit->_id ?></a>
+			</p>
+			<?php foreach ($hit->highlight->text as $fragment): ?>
+			<p class="snippet-text">&hellip;<?= $fragment ?>&hellip;</p>
+			<?php endforeach ?>
+		</div>
+		<?php endforeach ?>
+
+	</div>
+
+</div>
+<?php endforeach ?>
+
+<?php endif ?>
+
+</body>
+</html>
