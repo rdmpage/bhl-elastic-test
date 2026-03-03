@@ -39,7 +39,7 @@ foreach ($files as $filename)
 			
 			$doc = new stdclass;
 			$doc->id = $page->PageID;
-			$doc->item = $page->ItemID;
+			$doc->itemid = $page->ItemID;
 			$doc->text = $text;
 			
 			$doc->volume  = $item->Volume;

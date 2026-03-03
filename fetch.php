@@ -60,6 +60,7 @@ $items = array(
 346076,
 112048,
 112922,
+267581,
 );
 
 foreach ($items as $ItemID)
@@ -86,9 +87,11 @@ foreach ($items as $ItemID)
 	
 	}
 	
+	/*
 	$json = file_get_contents($filename);
 	
 	echo $json;
+	*/
 
 
 }
