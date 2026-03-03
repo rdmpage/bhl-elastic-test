@@ -91,6 +91,15 @@ mark {
 	font-weight:bold;
 	background: none;
 }
+a {
+    text-decoration: none;
+}
+
+/* If we want an underline when we mouse over the link */
+a:hover {
+    text-decoration:underline;
+}			
+
 </style>';
 echo '</head>';
 echo '<body>';
@@ -107,23 +116,30 @@ foreach ($obj->aggregations->by_item_id->buckets as $bucket)
 	
 	echo  $bucket->key . " " . $bucket->top_pages->hits->hits[0]->_source->volume . " <b>" . $bucket->max_score->value . "</b>";
 	
+	
 	echo '<ul>';
 	foreach ($bucket->top_pages->hits->hits as $hit)
 	{
 		echo '<li>';
 		
+		echo '<span>page number goes here</span>';
+		
 		echo '<ul>';
 		foreach ($hit->highlight->text as $highlight)
 		{
-			echo '<li>' . $highlight . '</li>';
+			echo '<li>';
+			echo '<a href="https://www.biodiversitylibrary.org/page/' . $hit->_id . '" target="_new">';
+			echo $highlight;
+			echo '</li>';
+			echo '</a>';
 		}
 		echo '</ul>';
-		
 		
 		echo '</li>';
 	
 	}
 	echo '</ul>';
+	
 	
 	
 	echo '</li>';
