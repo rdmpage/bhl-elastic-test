@@ -63,6 +63,16 @@ $items = array(
 267581,
 );
 
+$items = array(
+148285,
+148271,
+);
+
+$items = array(
+336337,
+238344,
+);
+
 foreach ($items as $ItemID)
 {
 	$filename = 'item' . $ItemID . '.json';
