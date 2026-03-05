@@ -3,11 +3,31 @@
         "aliases": {},
         "mappings": {
             "properties": {
+                "entities": {
+                    "properties": {
+                        "name": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                    "type": "keyword"
+                                }
+                            },
+                            "analyzer": "folding"
+                        },
+                        "type": {
+                            "type": "keyword"
+                        }
+                    }
+                },
                 "id": {
                     "type": "long"
                 },
                 "itemid": {
                     "type": "keyword"
+                },
+                "name": {
+                    "type": "keyword",
+                    "index": false
                 },
                 "text": {
                     "type": "text",
@@ -33,7 +53,7 @@
                 },
                 "number_of_shards": "1",
                 "provided_name": "bhltest",
-                "creation_date": "1772544056209",
+                "creation_date": "1772723096110",
                 "analysis": {
                     "analyzer": {
                         "folding": {
@@ -46,7 +66,7 @@
                     }
                 },
                 "number_of_replicas": "1",
-                "uuid": "wPw4MNUHRhyXVfUCS4la_g",
+                "uuid": "jbHnf4uQTWCRbRvoNfFKww",
                 "version": {
                     "created": "8100299"
                 }
