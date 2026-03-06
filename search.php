@@ -11,6 +11,8 @@ $total          = 0;
 $entity         = null;
 $entity_prefix  = null;   // e.g. 'taxonname'
 $entity_value   = null;   // e.g. 'Sheldonia'
+$chart_data     = [];     // label => page count for the time histogram
+$chart_max      = 1;      // highest count in $chart_data (for scaling bar heights)
 
 // ── Parse optional prefix syntax: "taxonname:Sheldonia" ──────────────────────
 if ($search_query !== '' && preg_match('/^(\w+):(.+)$/i', $search_query, $m))
@@ -78,6 +80,15 @@ if ($search_query !== '')
 					'order' => ['_key' => 'asc'],
 				],
 			],
+			// Global agg ignores the query — gives us the full DB year range
+			// so zero-hit years can be shown on the chart x-axis
+			'year_range' => [
+				'global' => new stdClass(),
+				'aggs'   => [
+					'min_year' => ['min' => ['field' => 'year']],
+					'max_year' => ['max' => ['field' => 'year']],
+				],
+			],
 			'by_item_id' => [
 				'terms' => [
 					'field' => 'itemid',
@@ -104,6 +115,56 @@ if ($search_query !== '')
 	$obj     = json_decode($resp);
 	$total   = $obj->hits->total->value;
 	$buckets = $obj->aggregations->by_item_id->buckets;
+
+	// ── Build year/decade chart data ─────────────────────────────────────────
+	// Use the global min/max so the x-axis covers the whole DB, not just hits
+	$year_range  = $obj->aggregations->year_range ?? null;
+	$db_min_year = $year_range ? (int)$year_range->min_year->value : null;
+	$db_max_year = $year_range ? (int)$year_range->max_year->value : null;
+
+	$year_buckets = $obj->aggregations->by_year->buckets ?? [];
+
+	if ($db_min_year !== null && $db_max_year !== null)
+	{
+		$span = $db_max_year - $db_min_year;
+
+		if ($span > 50)
+		{
+			// Aggregate hit counts by decade from the query results
+			$decade_hits = [];
+			foreach ($year_buckets as $yb)
+			{
+				$d = (int)(floor((int)$yb->key / 10) * 10);
+				$decade_hits[$d] = ($decade_hits[$d] ?? 0) + $yb->doc_count;
+			}
+
+			// Fill every decade in the DB range, zero where no hits
+			$first = (int)(floor($db_min_year / 10) * 10);
+			$last  = (int)(floor($db_max_year  / 10) * 10);
+			for ($d = $first; $d <= $last; $d += 10)
+			{
+				$chart_data[$d . 's'] = $decade_hits[$d] ?? 0;
+			}
+		}
+		else
+		{
+			// Index hit counts by year
+			$year_hits = [];
+			foreach ($year_buckets as $yb)
+			{
+				$year_hits[(int)$yb->key] = $yb->doc_count;
+			}
+
+			// Fill every year in the DB range, zero where no hits
+			for ($y = $db_min_year; $y <= $db_max_year; $y++)
+			{
+				$chart_data[(string)$y] = $year_hits[$y] ?? 0;
+			}
+		}
+
+		$chart_max = !empty($chart_data) ? max($chart_data) : 1;
+		if ($chart_max < 1) $chart_max = 1;
+	}
 }
 
 ?><!DOCTYPE html>
@@ -276,6 +337,48 @@ mark {
 }
 .kp-id a:hover { text-decoration: underline; }
 
+/* ── Year/decade histogram ── */
+.year-chart {
+	margin-bottom: 24px;
+	overflow-x: auto;
+}
+.chart-bars {
+	display: flex;
+	align-items: flex-end;
+	gap: 3px;
+	height: 80px;
+	border-bottom: 1px solid #dadce0;
+}
+.bar-col {
+	flex: 1;
+	min-width: 14px;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	cursor: default;
+}
+.bar-col .bar {
+	width: 100%;
+	background: #4285f4;
+	border-radius: 2px 2px 0 0;
+}
+.bar-col:hover .bar { background: #1a73e8; }
+.chart-labels {
+	display: flex;
+	gap: 3px;
+	padding-top: 3px;
+}
+.chart-labels .bar-label {
+	flex: 1;
+	min-width: 14px;
+	font-size: 9px;
+	color: #70757a;
+	text-align: center;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
 /* ── Mobile: panel stacks above results ── */
 @media (max-width: 768px) {
 	body { padding: 16px; }
@@ -312,6 +415,28 @@ mark {
 <div class="page-layout">
 
 	<div class="results-column">
+
+		<?php if (!empty($chart_data)): ?>
+		<div class="year-chart">
+			<div class="chart-bars">
+				<?php foreach ($chart_data as $label => $count):
+					// Non-zero bars get at least 2% so a single-page year is visible;
+					// zero-count columns get no bar at all
+					$pct = $count > 0 ? max(2, round($count / $chart_max * 100)) : 0;
+					$tip = $label . ': ' . $count . ' page' . ($count !== 1 ? 's' : '');
+				?>
+				<div class="bar-col" title="<?= htmlspecialchars($tip) ?>">
+					<div class="bar" style="height:<?= $pct ?>%"></div>
+				</div>
+				<?php endforeach ?>
+			</div>
+			<div class="chart-labels">
+				<?php foreach ($chart_data as $label => $count): ?>
+				<div class="bar-label"><?= htmlspecialchars($label) ?></div>
+				<?php endforeach ?>
+			</div>
+		</div>
+		<?php endif ?>
 
 		<?php foreach ($buckets as $bucket):
 			$top_hit   = $bucket->top_pages->hits->hits[0];
