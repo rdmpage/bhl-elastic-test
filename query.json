@@ -25,6 +25,13 @@
     }
   },
   "aggs": {
+    "by_year": {
+      "terms": {
+        "field": "year",
+        "size": 500,
+        "order": { "_key": "asc" }
+      }
+    },
     "by_item_id": {
       "terms": {
         "field": "itemid",
@@ -45,7 +52,7 @@
         "top_pages": {
           "top_hits": {
             "size": 3,
-            "_source": ["id", "itemid", "volume", "year"],
+            "_source": ["id", "itemid", "name", "volume", "year"],
             "highlight": {
               "pre_tags": ["<mark>"],
               "post_tags": ["</mark>"],

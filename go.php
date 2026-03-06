@@ -2,6 +2,7 @@
 
 require_once(dirname(__FILE__) . '/config.inc.php');
 require_once(dirname(__FILE__) . '/elastic.php');
+require_once(dirname(__FILE__) . '/catalogueoflife/match_name.php');
 
 //----------------------------------------------------------------------------------------
 function get($url)
@@ -66,10 +67,22 @@ foreach ($items as $ItemID)
 		{
 			foreach ($names as $name_string)
 			{
+				// Assume that name must be in Catalogue of Life to be real
+				$matches = match_name($name_string);				
+				if (count($matches) > 0)
+				{
+					// ignore homonyms for now
+					$entity = $matches[0];
+					$entities[] = $entity;
+				
+				}
+			
+				/*
 				$entity       = new stdClass;
 				$entity->type = 'TaxonName';
 				$entity->name = $name_string;
 				$entities[]   = $entity;
+				*/
 			}
 		}
 		$doc->entities = $entities;

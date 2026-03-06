@@ -23,7 +23,7 @@ if (file_exists(dirname(__FILE__) . '/env.php'))
 
 $config['bhl_key'] =  getenv('BHL_APIKEY');
 
-
+// Elasticsearch
 if ($local)
 {
 	$config['elastic_options'] = array(
@@ -44,5 +44,10 @@ else
 			'password' 	=> getenv('ELASTIC_PASSWORD'),			
 			);			
 }
+
+// Entity matching databases
+$config['pdo'] = new PDO('sqlite:/Users/rpage/Sites/classification-o/col/col.db');
+
+
 
 ?>

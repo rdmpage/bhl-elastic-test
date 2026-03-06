@@ -35,7 +35,7 @@ if ($search_query !== '')
 					'top_pages' => [
 						'top_hits' => [
 							'size'    => 3,
-							'_source' => ['id', 'itemid', 'volume', 'year'],
+							'_source' => ['id', 'itemid', 'name', 'volume', 'year'],
 							'highlight' => [
 								'pre_tags'  => ['<mark>'],
 								'post_tags' => ['</mark>'],
@@ -218,12 +218,13 @@ mark {
 		<p class="result-meta"><?= $year ?> &middot; Biodiversity Heritage Library</p>
 
 		<?php foreach ($bucket->top_pages->hits->hits as $hit):
-			$page_url = 'https://www.biodiversitylibrary.org/page/' . $hit->_id;
+			$page_url  = 'https://www.biodiversitylibrary.org/page/' . $hit->_id;
+			$page_name = !empty($hit->_source->name) ? ' ' . htmlspecialchars($hit->_source->name) : '';
 		?>
 		<div class="snippet">
 			<p class="snippet-label">
-				Found on page &ndash;
-				<a href="<?= $page_url ?>" target="_blank">View page <?= $hit->_id ?></a>
+				Found on page<?= $page_name ?> &ndash;
+				<a href="<?= $page_url ?>" target="_blank">View page</a>
 			</p>
 			<?php foreach ($hit->highlight->text as $fragment): ?>
 			<p class="snippet-text">&hellip;<?= $fragment ?>&hellip;</p>
