@@ -6,32 +6,71 @@ require_once ('catalogueoflife/match_name.php');
 
 $search_query = isset($_GET['q']) ? trim($_GET['q']) : '';
 
-$buckets  = [];
-$total    = 0;
-$entity   = null;
+$buckets        = [];
+$total          = 0;
+$entity         = null;
+$entity_prefix  = null;   // e.g. 'taxonname'
+$entity_value   = null;   // e.g. 'Sheldonia'
+
+// ── Parse optional prefix syntax: "taxonname:Sheldonia" ──────────────────────
+if ($search_query !== '' && preg_match('/^(\w+):(.+)$/i', $search_query, $m))
+{
+	$entity_prefix = strtolower($m[1]);
+	$entity_value  = trim($m[2]);
+}
+
+// Supported entity prefixes; unknown prefixes fall through to full-text search
+$known_prefixes = ['taxonname'];
+$is_entity_search = in_array($entity_prefix, $known_prefixes);
 
 if ($search_query !== '')
 {
-	// Entity lookup — check CoL before running the full-text search
-	$matches = match_name($search_query);
+	// ── Knowledge panel lookup ───────────────────────────────────────────────
+	// Use extracted value for prefixed searches, full query otherwise
+	$col_lookup = $is_entity_search ? $entity_value : $search_query;
+	$matches    = match_name($col_lookup);
 	if (!empty($matches))
 	{
-		$entity = $matches[0];   // use first match; ignore homonyms for now
+		$entity = $matches[0];   // first match; homonyms ignored for now
 	}
 
-	// Full-text search (always runs regardless of entity match)
-	$query = [
-		'size'  => 0,
-		'query' => [
+	// ── Build ES query ───────────────────────────────────────────────────────
+	if ($is_entity_search && $entity_prefix === 'taxonname')
+	{
+		// Exact match on the indexed entity name; highlight_query finds the
+		// term in the OCR text so snippets still show context
+		$es_query        = ['term' => ['entities.name.keyword' => $entity_value]];
+		$highlight_query = ['match_phrase' => ['text' => ['query' => $entity_value, 'slop' => 3]]];
+	}
+	else
+	{
+		// Standard full-text search
+		$es_query = [
 			'bool' => [
 				'should' => [
 					['match_phrase' => ['text' => ['query' => $search_query, 'slop' => 3, 'boost' => 3]]],
 					['match'        => ['text' => ['query' => $search_query, 'minimum_should_match' => '75%']]],
 				],
 				'minimum_should_match' => 1,
-			]
-		],
-		'aggs' => [
+			],
+		];
+		$highlight_query = null;
+	}
+
+	$highlight = [
+		'pre_tags'  => ['<mark>'],
+		'post_tags' => ['</mark>'],
+		'fields'    => ['text' => ['fragment_size' => 200, 'number_of_fragments' => 2]],
+	];
+	if ($highlight_query)
+	{
+		$highlight['highlight_query'] = $highlight_query;
+	}
+
+	$query = [
+		'size'  => 0,
+		'query' => $es_query,
+		'aggs'  => [
 			'by_year' => [
 				'terms' => [
 					'field' => 'year',
@@ -51,15 +90,9 @@ if ($search_query !== '')
 					],
 					'top_pages' => [
 						'top_hits' => [
-							'size'    => 3,
-							'_source' => ['id', 'itemid', 'name', 'volume', 'year'],
-							'highlight' => [
-								'pre_tags'  => ['<mark>'],
-								'post_tags' => ['</mark>'],
-								'fields'    => [
-									'text' => ['fragment_size' => 200, 'number_of_fragments' => 2],
-								],
-							],
+							'size'      => 3,
+							'_source'   => ['id', 'itemid', 'name', 'volume', 'year'],
+							'highlight' => $highlight,
 						],
 					],
 				],
@@ -261,8 +294,14 @@ mark {
 <?php if ($search_query !== ''): ?>
 
 <p class="result-count">
-	<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> matched
-	across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
+	<?php if ($is_entity_search): ?>
+		<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> mentioning
+		<em><?= htmlspecialchars($entity_value) ?></em>
+		across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
+	<?php else: ?>
+		<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> matched
+		across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
+	<?php endif ?>
 </p>
 
 <div class="page-layout">
