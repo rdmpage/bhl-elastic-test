@@ -83,6 +83,53 @@ Results are aggregated by `itemid` so a client can display search hits grouped b
 
 The top-level `size` is set to `0` because the flat `hits` list is redundant — the aggregation is the result set.
 
+## Entities
+
+A BHL page may contain mentions of entities such as taxonomic names, people, and places. For taxonomic names we will already have a list of names that BHL has found on the page. We map these names to the Catalogue of Life (CoL), retrieving a unique identifier for the name, and also an array of identifiers corresponding to the path from the root (“Biota”) to the taxon with that name. This path will enable us to query by higher taxa (e.g., all items about frogs).
+
+### CoL database
+
+The Catalogue of Life database can be downloaded and imported into SQLite. The key table is `nameusage` which lists names, their CoL identifier, and the parent of each taxon.
+
+### Creating taxon paths
+
+ChatGPT suggested the following approach to add taxon paths to the SQLite database. Firstly create a table:
+
+```
+DROP TABLE IF EXISTS taxon_paths;
+
+CREATE TABLE taxon_paths (
+  taxonID   TEXT PRIMARY KEY,
+  path_json TEXT NOT NULL
+);
+```
+
+Then we create the paths:
+
+```
+INSERT OR REPLACE INTO taxon_paths(taxonID, path_json)
+WITH RECURSIVE down(taxonID, parentID, path_json) AS (
+  SELECT taxonID, parentID, json_array(taxonID)
+  FROM nameusage
+  WHERE parentID IS NULL
+  UNION ALL
+  SELECT c.taxonID, c.parentID, json_insert(down.path_json, '$[#]', c.taxonID)
+  FROM nameusage c
+  JOIN down ON c.parentID = down.taxonID
+)
+SELECT taxonID, path_json
+FROM down;
+```
+
+A query to match a name is:
+
+```
+SELECT taxonID, scientificName, path_json FROM nameusage INNER JOIN taxon_paths USING(taxonID) WHERE scientificName="Sheldonia wolkbergensis";
+```
+
+## Geotagging
+
+
 ## Example queries
 
 `Abeille de Perrin E (1894) Diagnoses de coléoptères réputés nouveaux. L’Échange. Revue Linnéenne 10(115): 91–94.`
