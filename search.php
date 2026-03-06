@@ -176,6 +176,8 @@ if ($search_query !== '')
 	{
 		$span = $db_max_year - $db_min_year;
 
+		$min_bars = 10;   // never let the chart be narrower than this many columns
+
 		if ($span > 50)
 		{
 			// Aggregate hit counts by decade from the query results
@@ -189,6 +191,18 @@ if ($search_query !== '')
 			// Fill every decade in the DB range, zero where no hits
 			$first = (int)(floor($db_min_year / 10) * 10);
 			$last  = (int)(floor($db_max_year  / 10) * 10);
+
+			// Pad so there are at least $min_bars columns
+			$num_decades = ($last - $first) / 10 + 1;
+			if ($num_decades < $min_bars)
+			{
+				$deficit = $min_bars - $num_decades;
+				$pad_l   = (int) floor($deficit / 2);
+				$pad_r   = $deficit - $pad_l;
+				$first  -= $pad_l * 10;
+				$last   += $pad_r * 10;
+			}
+
 			for ($d = $first; $d <= $last; $d += 10)
 			{
 				$chart_data[$d . 's'] = $decade_hits[$d] ?? 0;
@@ -203,8 +217,24 @@ if ($search_query !== '')
 				$year_hits[(int)$yb->key] = $yb->doc_count;
 			}
 
-			// Fill every year in the DB range, zero where no hits
-			for ($y = $db_min_year; $y <= $db_max_year; $y++)
+			// Pad so there are at least $min_bars columns
+			$range = $db_max_year - $db_min_year + 1;
+			if ($range < $min_bars)
+			{
+				$deficit  = $min_bars - $range;
+				$pad_l    = (int) floor($deficit / 2);
+				$pad_r    = $deficit - $pad_l;
+				$adj_min  = $db_min_year - $pad_l;
+				$adj_max  = $db_max_year + $pad_r;
+			}
+			else
+			{
+				$adj_min = $db_min_year;
+				$adj_max = $db_max_year;
+			}
+
+			// Fill every year in the padded range, zero where no hits
+			for ($y = $adj_min; $y <= $adj_max; $y++)
 			{
 				$chart_data[(string)$y] = $year_hits[$y] ?? 0;
 			}
@@ -340,6 +370,7 @@ body {
 	font-size: 13px;
 	line-height: 1.6;
 	color: #3c4043;
+	margin-bottom: 4px;
 }
 mark {
 	background: none;
@@ -732,20 +763,20 @@ mark {
 				        onclick="document.getElementById('cite-<?= htmlspecialchars($bucket->key) ?>').showModal()">Cite</button>
 				<?php endif ?>
 
-				<?php foreach ($bucket->top_pages->hits->hits as $hit):
-					$page_url  = 'https://www.biodiversitylibrary.org/page/' . str_replace('page_', '', $hit->_id);
-					$page_name = !empty($hit->_source->name) ? ' ' . htmlspecialchars($hit->_source->name) : '';
+				<?php
+				// Parts mode: no box, no page link; cap at 3 fragments across all hits
+				$frag_count = 0;
+				foreach ($bucket->top_pages->hits->hits as $hit)
+				{
+					if (empty($hit->highlight->text)) continue;
+					foreach ($hit->highlight->text as $fragment)
+					{
+						if ($frag_count >= 3) break 2;
+						$frag_count++;
+						echo '<p class="snippet-text">&hellip;' . $fragment . '&hellip;</p>' . "\n";
+					}
+				}
 				?>
-				<div class="snippet">
-					<p class="snippet-label">
-						Found on page<?= $page_name ?> &ndash;
-						<a href="<?= $page_url ?>" target="_blank">View page</a>
-					</p>
-					<?php foreach ($hit->highlight->text as $fragment): ?>
-					<p class="snippet-text">&hellip;<?= $fragment ?>&hellip;</p>
-					<?php endforeach ?>
-				</div>
-				<?php endforeach ?>
 
 			</div>
 
@@ -774,9 +805,9 @@ mark {
 			</div>
 			<div class="cite-footer">
 				<span class="cite-dl-label">Download:</span>
-				<a class="cite-dl-link" href="#">RIS</a>
-				<a class="cite-dl-link" href="#">BibTeX</a>
-				<a class="cite-dl-link" href="#">CSL-JSON</a>
+				<a class="cite-dl-link" href="part.php?id=<?= urlencode($bucket->key) ?>&amp;format=ris"    download>RIS</a>
+				<a class="cite-dl-link" href="part.php?id=<?= urlencode($bucket->key) ?>&amp;format=bibtex" download>BibTeX</a>
+				<a class="cite-dl-link" href="part.php?id=<?= urlencode($bucket->key) ?>&amp;format=csl"    download>CSL-JSON</a>
 			</div>
 		</dialog>
 		<?php endif ?>
