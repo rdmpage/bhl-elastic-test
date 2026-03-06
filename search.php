@@ -260,14 +260,14 @@ mark {
 
 <?php if ($search_query !== ''): ?>
 
+<p class="result-count">
+	<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> matched
+	across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
+</p>
+
 <div class="page-layout">
 
 	<div class="results-column">
-
-		<p class="result-count">
-			<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> matched
-			across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
-		</p>
 
 		<?php foreach ($buckets as $bucket):
 			$top_hit   = $bucket->top_pages->hits->hits[0];
