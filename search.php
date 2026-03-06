@@ -265,6 +265,11 @@ mark {
 	font-size: 12px;
 	color: #70757a;
 }
+.kp-name a {
+	color: inherit;
+	text-decoration: none;
+}
+.kp-name a:hover { text-decoration: underline; }
 .kp-id a {
 	color: #1a0dab;
 	text-decoration: none;
@@ -356,7 +361,11 @@ mark {
 	<?php if ($entity): ?>
 	<aside class="knowledge-panel">
 		<p class="kp-type"><?= htmlspecialchars($entity->type) ?></p>
-		<p class="kp-name"><?= htmlspecialchars($entity->name) ?></p>
+		<p class="kp-name">
+			<a href="?q=taxonname:<?= urlencode($entity->name) ?>">
+				<?= htmlspecialchars($entity->name) ?>
+			</a>
+		</p>
 		<p class="kp-id">
 			Catalogue of Life:
 			<a href="https://www.catalogueoflife.org/data/taxon/<?= urlencode($entity->id) ?>" target="_blank">
