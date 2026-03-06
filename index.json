@@ -1,76 +1,37 @@
 {
-    "bhltest": {
-        "aliases": {},
-        "mappings": {
-            "properties": {
-                "entities": {
-                    "properties": {
-                        "name": {
-                            "type": "text",
-                            "fields": {
-                                "keyword": {
-                                    "type": "keyword"
-                                }
-                            },
-                            "analyzer": "folding"
-                        },
-                        "type": {
-                            "type": "keyword"
-                        }
-                    }
-                },
-                "id": {
-                    "type": "long"
-                },
-                "itemid": {
-                    "type": "keyword"
-                },
-                "name": {
-                    "type": "keyword",
-                    "index": false
-                },
-                "text": {
-                    "type": "text",
-                    "index_options": "offsets",
-                    "analyzer": "folding"
-                },
-                "volume": {
-                    "type": "keyword"
-                },
-                "year": {
-                    "type": "integer"
-                }
-            }
-        },
-        "settings": {
-            "index": {
-                "routing": {
-                    "allocation": {
-                        "include": {
-                            "_tier_preference": "data_content"
-                        }
-                    }
-                },
-                "number_of_shards": "1",
-                "provided_name": "bhltest",
-                "creation_date": "1772723096110",
-                "analysis": {
-                    "analyzer": {
-                        "folding": {
-                            "filter": [
-                                "lowercase",
-                                "asciifolding"
-                            ],
-                            "tokenizer": "standard"
-                        }
-                    }
-                },
-                "number_of_replicas": "1",
-                "uuid": "jbHnf4uQTWCRbRvoNfFKww",
-                "version": {
-                    "created": "8100299"
-                }
-            }
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "folding": {
+          "tokenizer": "standard",
+          "filter": ["lowercase", "asciifolding"]
         }
+      }
     }
+  },
+  "mappings": {
+    "dynamic": true,
+    "properties": {
+      "type":      { "type": "keyword" },
+      "id":        { "type": "keyword" },
+      "itemid":    { "type": "keyword" },
+      "partid":    { "type": "keyword" },
+      "year":      { "type": "integer" },
+      "volume":    { "type": "keyword" },
+      "name":      { "type": "text", "analyzer": "folding", "index_options": "offsets" },
+      "text":      { "type": "text", "analyzer": "folding", "index_options": "offsets" },
+      "tags":      { "type": "keyword" },
+      "thumbnail": { "type": "keyword", "index": false },
+      "entities": {
+        "properties": {
+          "name": {
+            "type": "text",
+            "analyzer": "folding",
+            "fields": { "keyword": { "type": "keyword" } }
+          },
+          "type": { "type": "keyword" }
+        }
+      }
+    }
+  }
 }

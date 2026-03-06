@@ -6,7 +6,10 @@ require_once ('catalogueoflife/match_name.php');
 
 $search_query = isset($_GET['q']) ? trim($_GET['q']) : '';
 
+$mode           = isset($_GET['parts']) ? 'parts' : 'all';
 $buckets        = [];
+$part_buckets   = [];
+$part_meta      = [];     // partid => part _source, fetched via _mget
 $total          = 0;
 $entity         = null;
 $entity_prefix  = null;   // e.g. 'taxonname'
@@ -71,7 +74,13 @@ if ($search_query !== '')
 
 	$query = [
 		'size'  => 0,
-		'query' => $es_query,
+		// Always restrict to page documents so part docs don't pollute results
+		'query' => [
+			'bool' => [
+				'must'   => $es_query,
+				'filter' => ['term' => ['type' => 'page']],
+			],
+		],
 		'aggs'  => [
 			'by_year' => [
 				'terms' => [
@@ -108,13 +117,52 @@ if ($search_query !== '')
 					],
 				],
 			],
+			// Same pattern as by_item_id but buckets on partid — only pages
+			// with a partid field contribute, so items-only pages are excluded
+			'by_partid' => [
+				'terms' => [
+					'field' => 'partid',
+					'size'  => 20,
+					'order' => ['max_score.value' => 'desc'],
+				],
+				'aggs' => [
+					'max_score' => [
+						'max' => ['script' => ['lang' => 'painless', 'source' => '_score']],
+					],
+					'top_pages' => [
+						'top_hits' => [
+							'size'      => 2,
+							'_source'   => ['id', 'partid', 'itemid', 'year'],
+							'highlight' => $highlight,
+						],
+					],
+				],
+			],
 		],
 	];
 
 	$resp    = $elastic->send('POST', '_search', json_encode($query));
 	$obj     = json_decode($resp);
 	$total   = $obj->hits->total->value;
-	$buckets = $obj->aggregations->by_item_id->buckets;
+	$buckets      = $obj->aggregations->by_item_id->buckets;
+	$part_buckets = $obj->aggregations->by_partid->buckets ?? [];
+
+	// ── Fetch part metadata via _mget (parts mode only) ──────────────────────
+	// Bucket keys are the partid values (e.g. "part_789"); use them directly
+	// as document IDs since that is how go.php stored the part documents.
+	if ($mode === 'parts' && !empty($part_buckets))
+	{
+		$part_ids  = array_map(fn($b) => $b->key, $part_buckets);
+		$mget_resp = $elastic->send('POST', '_mget', json_encode(['ids' => $part_ids]));
+		$mget_obj  = json_decode($mget_resp);
+		foreach ($mget_obj->docs as $doc)
+		{
+			if ($doc->found)
+			{
+				$part_meta[$doc->_id] = $doc->_source;
+			}
+		}
+	}
 
 	// ── Build year/decade chart data ─────────────────────────────────────────
 	// Use the global min/max so the x-axis covers the whole DB, not just hits
@@ -337,6 +385,100 @@ mark {
 }
 .kp-id a:hover { text-decoration: underline; }
 
+/* ── Cite button (parts mode) ── */
+.cite-btn {
+	background: none;
+	border: none;
+	color: #1a0dab;
+	font-size: 12px;
+	cursor: pointer;
+	padding: 2px 0;
+	text-decoration: underline;
+	font-family: inherit;
+	display: inline;
+}
+.cite-btn:hover { color: #1558d6; }
+
+/* ── Cite dialog ── */
+.cite-dialog {
+	border: none;
+	border-radius: 8px;
+	box-shadow: 0 4px 24px rgba(0,0,0,.25);
+	padding: 0;
+	max-width: 560px;
+	width: 90vw;
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+}
+.cite-dialog::backdrop { background: rgba(0,0,0,.4); }
+.cite-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 16px 20px 12px;
+	border-bottom: 1px solid #e0e0e0;
+}
+.cite-title {
+	font-size: 16px;
+	font-weight: 600;
+	color: #202124;
+	margin: 0;
+}
+.cite-close {
+	background: none;
+	border: none;
+	font-size: 18px;
+	cursor: pointer;
+	color: #70757a;
+	padding: 2px 4px;
+	font-family: inherit;
+	line-height: 1;
+}
+.cite-close:hover { color: #202124; }
+.cite-body {
+	padding: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	max-height: 60vh;
+	overflow-y: auto;
+}
+.cite-format-label {
+	font-size: 11px;
+	font-weight: bold;
+	letter-spacing: .05em;
+	text-transform: uppercase;
+	color: #70757a;
+	display: block;
+	margin-bottom: 6px;
+}
+.cite-format-text {
+	font-size: 13px;
+	line-height: 1.5;
+	color: #3c4043;
+	background: #f8f9fa;
+	border: 1px solid #e0e0e0;
+	border-radius: 4px;
+	padding: 10px 12px;
+	margin: 0;
+	white-space: pre-wrap;
+	word-break: break-word;
+	font-family: inherit;
+}
+.cite-footer {
+	padding: 12px 20px 16px;
+	border-top: 1px solid #e0e0e0;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+.cite-dl-label { font-size: 12px; color: #70757a; }
+.cite-dl-link  { font-size: 12px; color: #1a0dab; text-decoration: none; }
+.cite-dl-link:hover { text-decoration: underline; }
+
 /* ── Year/decade histogram ── */
 .year-chart {
 	margin-bottom: 24px;
@@ -379,6 +521,31 @@ mark {
 	overflow: hidden;
 }
 
+/* ── Mode tabs (All / Parts) ── */
+.mode-tabs {
+	display: flex;
+	gap: 0;
+	margin-bottom: 16px;
+	border-bottom: 1px solid #e0e0e0;
+}
+.mode-tabs .tab {
+	padding: 8px 16px;
+	font-size: 13px;
+	color: #70757a;
+	text-decoration: none;
+	border-bottom: 3px solid transparent;
+	margin-bottom: -1px;
+}
+.mode-tabs .tab:hover {
+	color: #1a0dab;
+	border-bottom-color: #dadce0;
+}
+.mode-tabs .tab.active {
+	color: #1a73e8;
+	border-bottom-color: #1a73e8;
+	font-weight: 500;
+}
+
 /* ── Mobile: panel stacks above results ── */
 @media (max-width: 768px) {
 	body { padding: 16px; }
@@ -396,13 +563,26 @@ mark {
 
 <form class="search-bar" method="get" action="">
 	<input type="text" name="q" value="<?= htmlspecialchars($search_query) ?>" placeholder="Search BHL…" autofocus>
+	<?php if ($mode === 'parts'): ?>
+	<input type="hidden" name="parts" value="">
+	<?php endif ?>
 	<button type="submit">Search</button>
 </form>
 
 <?php if ($search_query !== ''): ?>
 
+<nav class="mode-tabs">
+	<a href="?q=<?= urlencode($search_query) ?>"
+	   class="tab<?= $mode === 'all'   ? ' active' : '' ?>">All</a>
+	<a href="?q=<?= urlencode($search_query) ?>&amp;parts"
+	   class="tab<?= $mode === 'parts' ? ' active' : '' ?>">Parts</a>
+</nav>
+
 <p class="result-count">
-	<?php if ($is_entity_search): ?>
+	<?php if ($mode === 'parts'): ?>
+		<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> matched
+		across <?= count($part_buckets) ?> part<?= count($part_buckets) !== 1 ? 's' : '' ?>
+	<?php elseif ($is_entity_search): ?>
 		<?= $total ?> page<?= $total !== 1 ? 's' : '' ?> mentioning
 		<em><?= htmlspecialchars($entity_value) ?></em>
 		across <?= count($buckets) ?> item<?= count($buckets) !== 1 ? 's' : '' ?>
@@ -438,12 +618,14 @@ mark {
 		</div>
 		<?php endif ?>
 
+		<?php if ($mode === 'all'): ?>
+
 		<?php foreach ($buckets as $bucket):
 			$top_hit   = $bucket->top_pages->hits->hits[0];
 			$source    = $top_hit->_source;
 			$thumb_id  = $top_hit->_id;
-			$item_url  = 'https://www.biodiversitylibrary.org/item/' . $source->itemid;
-			$thumb_url = 'https://www.biodiversitylibrary.org/pagethumb/' . $thumb_id;
+			$item_url  = 'https://www.biodiversitylibrary.org/item/' . str_replace('item_', '', $source->itemid);
+			$thumb_url = 'https://www.biodiversitylibrary.org/pagethumb/' . str_replace('page_', '', $thumb_id);
 			$title     = $source->volume ?: 'Item ' . $source->itemid;
 			$year      = $source->year;
 		?>
@@ -462,7 +644,7 @@ mark {
 				<p class="result-meta"><?= $year ?> &middot; Biodiversity Heritage Library</p>
 
 				<?php foreach ($bucket->top_pages->hits->hits as $hit):
-					$page_url  = 'https://www.biodiversitylibrary.org/page/' . $hit->_id;
+					$page_url  = 'https://www.biodiversitylibrary.org/page/' . str_replace('page_', '', $hit->_id);
 					$page_name = !empty($hit->_source->name) ? ' ' . htmlspecialchars($hit->_source->name) : '';
 				?>
 				<div class="snippet">
@@ -480,6 +662,128 @@ mark {
 
 		</div>
 		<?php endforeach ?>
+
+		<?php elseif ($mode === 'parts'): ?>
+
+		<?php foreach ($part_buckets as $bucket):
+			$part      = $part_meta[$bucket->key] ?? null;
+			$part_url  = 'https://www.biodiversitylibrary.org/part/' . str_replace('part_', '', $bucket->key);
+			$title     = $part ? ($part->name ?? 'Part ' . $bucket->key) : 'Part ' . $bucket->key;
+
+			// Authors from CSL author array
+			$authors = '';
+			if ($part && !empty($part->csl->author))
+			{
+				$names = [];
+				foreach ($part->csl->author as $a)
+				{
+					$n = trim(($a->family ?? '') . ($a->given ? ', ' . $a->given : ''));
+					if ($n) $names[] = $n;
+				}
+				$authors = implode('; ', $names);
+			}
+
+			// Container title (journal / book)
+			$container = $part->csl->{'container-title'} ?? '';
+
+			// Year: prefer CSL issued date, fall back to page year
+			$first_hit = $bucket->top_pages->hits->hits[0];
+			$year = '';
+			if (!empty($part->csl->issued->{'date-parts'}[0][0]))
+			{
+				$year = $part->csl->issued->{'date-parts'}[0][0];
+			}
+			elseif (!empty($first_hit->_source->year))
+			{
+				$year = $first_hit->_source->year;
+			}
+
+			// Thumbnail: prefer part's own thumbnail page, fall back to first matching page
+			if ($part && !empty($part->thumbnail))
+			{
+				$thumb_url = 'https://www.biodiversitylibrary.org/pagethumb/' . $part->thumbnail;
+			}
+			else
+			{
+				$thumb_url = 'https://www.biodiversitylibrary.org/pagethumb/' . str_replace('page_', '', $first_hit->_id);
+			}
+
+			// Build meta line from non-empty pieces
+			$meta_parts = array_filter([$authors, $year, $container], fn($s) => $s !== '');
+		?>
+		<div class="result">
+
+			<div class="result-thumb">
+				<a href="<?= $part_url ?>" target="_blank">
+					<img src="<?= $thumb_url ?>" alt="Thumbnail">
+				</a>
+			</div>
+
+			<div class="result-body">
+				<h2 class="result-title">
+					<a href="<?= $part_url ?>" target="_blank"><?= htmlspecialchars($title) ?></a>
+				</h2>
+				<?php if ($meta_parts): ?>
+				<p class="result-meta"><?= implode(' &middot; ', array_map('htmlspecialchars', $meta_parts)) ?></p>
+				<?php endif ?>
+
+				<?php if ($part): ?>
+				<button class="cite-btn"
+				        onclick="document.getElementById('cite-<?= htmlspecialchars($bucket->key) ?>').showModal()">Cite</button>
+				<?php endif ?>
+
+				<?php foreach ($bucket->top_pages->hits->hits as $hit):
+					$page_url  = 'https://www.biodiversitylibrary.org/page/' . str_replace('page_', '', $hit->_id);
+					$page_name = !empty($hit->_source->name) ? ' ' . htmlspecialchars($hit->_source->name) : '';
+				?>
+				<div class="snippet">
+					<p class="snippet-label">
+						Found on page<?= $page_name ?> &ndash;
+						<a href="<?= $page_url ?>" target="_blank">View page</a>
+					</p>
+					<?php foreach ($hit->highlight->text as $fragment): ?>
+					<p class="snippet-text">&hellip;<?= $fragment ?>&hellip;</p>
+					<?php endforeach ?>
+				</div>
+				<?php endforeach ?>
+
+			</div>
+
+		</div>
+
+		<?php if ($part): ?>
+		<dialog id="cite-<?= htmlspecialchars($bucket->key) ?>" class="cite-dialog"
+		        data-csl="<?= htmlspecialchars(json_encode($part->csl)) ?>">
+			<div class="cite-header">
+				<h3 class="cite-title">Cite this article</h3>
+				<button class="cite-close" onclick="this.closest('dialog').close()" aria-label="Close">&#x2715;</button>
+			</div>
+			<div class="cite-body">
+				<div class="cite-format">
+					<span class="cite-format-label">APA</span>
+					<p class="cite-format-text cite-apa"></p>
+				</div>
+				<div class="cite-format">
+					<span class="cite-format-label">BibTeX</span>
+					<pre class="cite-format-text cite-bibtex"></pre>
+				</div>
+				<div class="cite-format">
+					<span class="cite-format-label">CSL-JSON</span>
+					<pre class="cite-format-text"><?= htmlspecialchars(json_encode($part->csl, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) ?></pre>
+				</div>
+			</div>
+			<div class="cite-footer">
+				<span class="cite-dl-label">Download:</span>
+				<a class="cite-dl-link" href="#">RIS</a>
+				<a class="cite-dl-link" href="#">BibTeX</a>
+				<a class="cite-dl-link" href="#">CSL-JSON</a>
+			</div>
+		</dialog>
+		<?php endif ?>
+
+		<?php endforeach ?>
+
+		<?php endif ?>
 
 	</div><!-- .results-column -->
 
@@ -504,5 +808,11 @@ mark {
 
 <?php endif ?>
 
+<script>
+// Close any <dialog> when the user clicks its backdrop (outside the box)
+document.querySelectorAll('.cite-dialog').forEach(function(d) {
+	d.addEventListener('click', function(e) { if (e.target === d) d.close(); });
+});
+</script>
 </body>
 </html>
