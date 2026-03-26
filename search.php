@@ -6,7 +6,7 @@ require_once ('catalogueoflife/match_name.php');
 
 $search_query = isset($_GET['q']) ? trim($_GET['q']) : '';
 
-$mode           = isset($_GET['parts']) ? 'parts' : 'all';
+$mode           = isset($_GET['map']) ? 'map' : (isset($_GET['parts']) ? 'parts' : 'all');
 $buckets        = [];
 $part_buckets   = [];
 $part_meta      = [];     // partid => part _source, fetched via _mget
@@ -16,6 +16,83 @@ $entity_prefix  = null;   // e.g. 'taxonname'
 $entity_value   = null;   // e.g. 'Sheldonia'
 $chart_data     = [];     // label => page count for the time histogram
 $chart_max      = 1;      // highest count in $chart_data (for scaling bar heights)
+
+// ── Map mode: AJAX endpoint for geo data ─────────────────────────────────────
+// Returns JSON (hex buckets or point list) used by the Leaflet map.
+// Must be checked before any HTML output.
+if ($mode === 'map' && isset($_GET['json']))
+{
+	$zoom        = isset($_GET['zoom'])   ? (int)$_GET['zoom']          : 2;
+	$bounds_raw  = isset($_GET['bounds']) ? $_GET['bounds']             : null;
+	$bounds      = $bounds_raw            ? json_decode($bounds_raw)    : null;
+
+	$geo_mode  = 'grid';
+	$precision = 5;
+
+	if ($search_query !== '') {
+		$text_clause = [
+			'bool' => [
+				'should' => [
+					['match_phrase' => ['text' => ['query' => $search_query, 'slop' => 3, 'boost' => 3]]],
+					['match'        => ['text' => ['query' => $search_query, 'minimum_should_match' => '75%']]],
+				],
+				'minimum_should_match' => 1,
+			],
+		];
+	} else {
+		$text_clause = ['match_all' => new stdClass()];
+	}
+
+	$geo_filters = [
+		['term'   => ['type'  => 'page']],
+		['exists' => ['field' => 'locations']],
+	];
+	if ($bounds) {
+		// Clamp to valid ranges — Leaflet can return lon > 180 at low zoom
+		$bn = min((float)$bounds->north,  90.0);
+		$bs = max((float)$bounds->south, -90.0);
+		$be = min((float)$bounds->east,  180.0);
+		$bw = max((float)$bounds->west, -180.0);
+		$geo_filters[] = [
+			'geo_bounding_box' => [
+				'locations' => [
+					'top_left'     => ['lat' => $bn, 'lon' => $bw],
+					'bottom_right' => ['lat' => $bs, 'lon' => $be],
+				],
+			],
+		];
+	}
+
+	$geo_query = ['bool' => ['must' => $text_clause, 'filter' => $geo_filters]];
+
+	header('Content-Type: application/json');
+
+	if ($geo_mode === 'grid') {
+		$agg = ['geotile_grid' => ['field' => 'locations', 'precision' => $precision, 'size' => 10000]];
+		if ($bounds) {
+			$agg['geotile_grid']['bounds'] = [
+				'top_left'     => ['lat' => $bn, 'lon' => $bw],
+				'bottom_right' => ['lat' => $bs, 'lon' => $be],
+			];
+		}
+		$resp = $elastic->send('POST', '_search', json_encode(['size' => 0, 'query' => $geo_query, 'aggs' => ['tile_grid' => $agg]]));
+		$obj  = json_decode($resp);
+		echo json_encode(['mode' => 'grid', 'buckets' => $obj->aggregations->tile_grid->buckets ?? []]);
+	} else {
+		$resp   = $elastic->send('POST', '_search', json_encode(['size' => 500, 'query' => $geo_query, '_source' => ['id', 'itemid', 'name', 'locations']]));
+		$obj    = json_decode($resp);
+		$points = [];
+		foreach ($obj->hits->hits as $hit) {
+			$src  = $hit->_source;
+			$locs = !empty($src->locations) ? (is_array($src->locations) ? $src->locations : [$src->locations]) : [];
+			foreach ($locs as $loc) {
+				$points[] = ['lat' => $loc->lat, 'lon' => $loc->lon, 'id' => $src->id ?? '', 'name' => $src->name ?? '', 'itemid' => $src->itemid ?? ''];
+			}
+		}
+		echo json_encode(['mode' => 'points', 'points' => $points]);
+	}
+	exit;
+}
 
 // ── Parse optional prefix syntax: "taxonname:Sheldonia" ──────────────────────
 if ($search_query !== '' && preg_match('/^(\w+):(.+)$/i', $search_query, $m))
@@ -416,6 +493,20 @@ mark {
 }
 .kp-id a:hover { text-decoration: underline; }
 
+/* ── Part action row: Cite + DOI ── */
+.part-actions {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin-bottom: 6px;
+}
+.part-doi {
+	font-size: 12px;
+	color: #70757a;
+	text-decoration: none;
+}
+.part-doi:hover { text-decoration: underline; color: #1a0dab; }
+
 /* ── Cite button (parts mode) ── */
 .cite-btn {
 	background: none;
@@ -512,6 +603,7 @@ mark {
 
 /* ── Year/decade histogram ── */
 .year-chart {
+	display: none;   /* hidden for now; remove this line to restore */
 	margin-bottom: 24px;
 	overflow-x: auto;
 }
@@ -588,26 +680,81 @@ mark {
 	}
 	.results-column { max-width: 100%; }
 }
-</style>
-</head>
-<body>
 
+/* ── Map mode ── */
+body.map-mode {
+	padding: 0;
+	height: 100vh;
+	display: flex;
+	flex-direction: column;
+}
+.page-top {
+	/* transparent in normal mode — body padding handles spacing */
+}
+body.map-mode .page-top {
+	padding: 24px 32px 0;
+	background: #fff;
+	flex-shrink: 0;
+}
+body.map-mode .mode-tabs {
+	margin-bottom: 0;
+}
+#map {
+	flex: 1;
+}
+#map-status {
+	position: fixed;
+	bottom: 28px;
+	left: 50%;
+	transform: translateX(-50%);
+	background: rgba(255,255,255,.92);
+	border: 1px solid #e0e0e0;
+	border-radius: 20px;
+	padding: 4px 14px;
+	font-size: 12px;
+	color: #70757a;
+	z-index: 1000;
+	pointer-events: none;
+	white-space: nowrap;
+}
+</style>
+<?php if ($mode === 'map'): ?>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<?php endif ?>
+</head>
+<body<?= $mode === 'map' ? ' class="map-mode"' : '' ?>>
+
+<div class="page-top">
 <form class="search-bar" method="get" action="">
 	<input type="text" name="q" value="<?= htmlspecialchars($search_query) ?>" placeholder="Search BHL…" autofocus>
 	<?php if ($mode === 'parts'): ?>
 	<input type="hidden" name="parts" value="">
+	<?php elseif ($mode === 'map'): ?>
+	<input type="hidden" name="map" value="">
 	<?php endif ?>
 	<button type="submit">Search</button>
 </form>
 
 <?php if ($search_query !== ''): ?>
-
 <nav class="mode-tabs">
 	<a href="?q=<?= urlencode($search_query) ?>"
 	   class="tab<?= $mode === 'all'   ? ' active' : '' ?>">All</a>
 	<a href="?q=<?= urlencode($search_query) ?>&amp;parts"
 	   class="tab<?= $mode === 'parts' ? ' active' : '' ?>">Parts</a>
+	<a href="?q=<?= urlencode($search_query) ?>&amp;map"
+	   class="tab<?= $mode === 'map'   ? ' active' : '' ?>">Map</a>
 </nav>
+<?php endif ?>
+</div><!-- .page-top -->
+
+<?php if ($search_query !== ''): ?>
+
+<?php if ($mode === 'map'): ?>
+
+<div id="map"></div>
+<div id="map-status">Loading…</div>
+
+<?php else: ?>
 
 <p class="result-count">
 	<?php if ($mode === 'parts'): ?>
@@ -708,7 +855,7 @@ mark {
 				$names = [];
 				foreach ($part->csl->author as $a)
 				{
-					$n = trim(($a->family ?? '') . ($a->given ? ', ' . $a->given : ''));
+					$n = trim(($a->family ?? '') . (($a->given ?? '') !== '' ? ', ' . $a->given : ''));
 					if ($n) $names[] = $n;
 				}
 				$authors = implode('; ', $names);
@@ -759,8 +906,14 @@ mark {
 				<?php endif ?>
 
 				<?php if ($part): ?>
-				<button class="cite-btn"
-				        onclick="document.getElementById('cite-<?= htmlspecialchars($bucket->key) ?>').showModal()">Cite</button>
+				<div class="part-actions">
+					<button class="cite-btn"
+					        onclick="document.getElementById('cite-<?= htmlspecialchars($bucket->key) ?>').showModal()">Cite</button>
+					<?php if (!empty($part->csl->DOI)): ?>
+					<a class="part-doi" href="https://doi.org/<?= urlencode($part->csl->DOI) ?>"
+					   target="_blank"><?= htmlspecialchars($part->csl->DOI) ?></a>
+					<?php endif ?>
+				</div>
 				<?php endif ?>
 
 				<?php
@@ -837,7 +990,8 @@ mark {
 
 </div><!-- .page-layout -->
 
-<?php endif ?>
+<?php endif // mode: all or parts ?>
+<?php endif // search_query ?>
 
 <script>
 // Close any <dialog> when the user clicks its backdrop (outside the box)
@@ -845,5 +999,67 @@ document.querySelectorAll('.cite-dialog').forEach(function(d) {
 	d.addEventListener('click', function(e) { if (e.target === d) d.close(); });
 });
 </script>
+
+<?php if ($mode === 'map'): ?>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const SEARCH_QUERY = <?= json_encode($search_query) ?>;
+
+const map = L.map('map').setView([20, 0], 2);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+	attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+	maxZoom: 19,
+}).addTo(map);
+
+// Convert an ES geotile key ("zoom/x/y") to a GeoJSON Polygon ring
+function tileToGeoJSONCoords(key) {
+	const [z, x, y] = key.split('/').map(Number);
+	const n     = Math.pow(2, z);
+	const west  = x / n * 360 - 180;
+	const east  = (x + 1) / n * 360 - 180;
+	const north = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)))       * 180 / Math.PI;
+	const south = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 1) / n))) * 180 / Math.PI;
+	return [[[west, south], [east, south], [east, north], [west, north], [west, south]]];
+}
+
+const params = new URLSearchParams({ map: '', json: '1' });
+if (SEARCH_QUERY) params.set('q', SEARCH_QUERY);
+
+document.getElementById('map-status').textContent = 'Loading…';
+
+fetch('?' + params.toString())
+	.then(r => r.json())
+	.then(data => {
+		const buckets  = data.buckets;
+		const maxCount = buckets.reduce((m, b) => Math.max(m, b.doc_count), 1);
+
+		const fc = {
+			type: 'FeatureCollection',
+			features: buckets.map(b => ({
+				type: 'Feature',
+				geometry:   { type: 'Polygon', coordinates: tileToGeoJSONCoords(b.key) },
+				properties: { count: b.doc_count },
+			})),
+		};
+
+		L.geoJSON(fc, {
+			style: f => {
+				const t = Math.pow(f.properties.count / maxCount, 0.4);
+				return { color: '#1a73e8', weight: 0.6, fillColor: '#4285f4', fillOpacity: 0.12 + 0.68 * t };
+			},
+			onEachFeature: (f, layer) => {
+				const n = f.properties.count;
+				layer.bindTooltip(n + ' page' + (n !== 1 ? 's' : ''));
+			},
+		}).addTo(map);
+
+		const total = buckets.reduce((s, b) => s + b.doc_count, 0);
+		document.getElementById('map-status').textContent =
+			total.toLocaleString() + ' pages across ' + buckets.length + ' cells';
+	})
+	.catch(e => console.error(e));
+</script>
+<?php endif ?>
 </body>
 </html>
